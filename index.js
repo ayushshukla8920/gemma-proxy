@@ -18,7 +18,7 @@ const availableModels = [
   "gemini-3.1-flash-lite-preview",
 ];
 
-// 🔧 Normalize OpenAI → Gemini format
+// ✅ Normalize OpenAI → Gemini
 function convertToGeminiContents(messages) {
   return messages.map((m) => {
     let text = "";
@@ -31,19 +31,22 @@ function convertToGeminiContents(messages) {
       text = m.content.text || "";
     }
 
+    // 🔥 Handle tool responses
+    if (m.role === "tool") {
+      text = `TOOL RESULT:\n${text}`;
+    }
+
     return {
       role:
         m.role === "assistant"
           ? "model"
-          : m.role === "system"
-          ? "user"
-          : "user",
+          : "user", // Gemini only supports user/model
       parts: [{ text }],
     };
   });
 }
 
-// 🔐 Simple API key check
+// 🔐 API Key validation
 function validateApiKey(req, res) {
   const auth = req.headers.authorization;
   if (!auth || !auth.startsWith("Bearer ")) {
@@ -53,11 +56,36 @@ function validateApiKey(req, res) {
   return true;
 }
 
+// 🧠 Detect tool calls (structured)
+function detectToolCall(text, tools = []) {
+  if (!tools || tools.length === 0) return null;
+
+  // VERY IMPORTANT: require JSON output from model
+  try {
+    const parsed = JSON.parse(text);
+
+    if (parsed.tool && parsed.arguments) {
+      return {
+        id: "call_" + Date.now(),
+        type: "function",
+        function: {
+          name: parsed.tool,
+          arguments: JSON.stringify(parsed.arguments),
+        },
+      };
+    }
+  } catch (e) {
+    return null;
+  }
+
+  return null;
+}
+
 app.post("/v1/chat/completions", async (req, res) => {
   try {
     if (!validateApiKey(req, res)) return;
 
-    const { model, messages, stream } = req.body;
+    const { model, messages, stream, tools } = req.body;
 
     const cleanModel = model?.includes("/")
       ? model.split("/")[1]
@@ -71,9 +99,32 @@ app.post("/v1/chat/completions", async (req, res) => {
       model: cleanModel,
     });
 
-    const contents = convertToGeminiContents(messages);
+    let contents = convertToGeminiContents(messages);
 
-    // 🚀 STREAMING RESPONSE
+    // 🧠 Add tool instruction to system
+    if (tools && tools.length > 0) {
+      contents.unshift({
+        role: "user",
+        parts: [
+          {
+            text: `
+You can call tools.
+
+Respond ONLY in JSON:
+{
+  "tool": "function_name",
+  "arguments": { ... }
+}
+
+Available tools:
+${JSON.stringify(tools, null, 2)}
+            `,
+          },
+        ],
+      });
+    }
+
+    // 🚀 STREAMING
     if (stream) {
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
@@ -95,22 +146,15 @@ app.post("/v1/chat/completions", async (req, res) => {
 
           isFirstChunk = false;
 
-          const data = {
-            id: "chatcmpl-" + Date.now(),
-            object: "chat.completion.chunk",
-            created: Math.floor(Date.now() / 1000),
-            model,
-            choices: [
-              {
-                index: 0,
-                delta,
-                finish_reason: null,
-              },
-            ],
-          };
-
-          res.write(`data: ${JSON.stringify(data)}\n\n`);
-          await new Promise((r) => setTimeout(r, 5));
+          res.write(
+            `data: ${JSON.stringify({
+              id: "chatcmpl-" + Date.now(),
+              object: "chat.completion.chunk",
+              created: Math.floor(Date.now() / 1000),
+              model,
+              choices: [{ index: 0, delta, finish_reason: null }],
+            })}\n\n`
+          );
         }
       }
 
@@ -140,6 +184,30 @@ app.post("/v1/chat/completions", async (req, res) => {
 
     const text = result.response.text();
 
+    // 🔥 TOOL CALL HANDLING
+    const toolCall = detectToolCall(text, tools);
+
+    if (toolCall) {
+      return res.json({
+        id: "chatcmpl-" + Date.now(),
+        object: "chat.completion",
+        created: Math.floor(Date.now() / 1000),
+        model,
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: null,
+              tool_calls: [toolCall],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      });
+    }
+
+    // ✅ Normal text response
     res.json({
       id: "chatcmpl-" + Date.now(),
       object: "chat.completion",
@@ -165,5 +233,5 @@ app.post("/v1/chat/completions", async (req, res) => {
 });
 
 app.listen(4000, () => {
-  console.log("🚀 OpenAI-compatible Gemini wrapper running on port 4000");
+  console.log("🚀 Gemini OpenAI-compatible wrapper running on port 4000");
 });
