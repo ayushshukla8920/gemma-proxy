@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 
 const client = new OpenAI({
-    apiKey: "ant",
+    apiKey: "sk-gemma-proxy-7k8r2n5m9p0q",
     baseURL: "http://localhost:4000/v1",
 });
 

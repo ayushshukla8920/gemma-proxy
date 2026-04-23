@@ -53,9 +53,16 @@ function convertToGeminiContents(messages) {
 function validateApiKey(req, res) {
   const auth = req.headers.authorization;
   if (!auth || !auth.startsWith("Bearer ")) {
-    res.status(401).json({ error: "Unauthorized" });
+    res.status(401).json({ error: "Unauthorized: Missing or invalid Authorization header" });
     return false;
   }
+
+  const key = auth.split(" ")[1];
+  if (key !== "sk-live-7k8r2n5m9p0qwf47shwkqndevbbs") {
+    res.status(401).json({ error: "Unauthorized: Invalid API Key" });
+    return false;
+  }
+
   return true;
 }
 
