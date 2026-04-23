@@ -6,7 +6,7 @@ const client = new OpenAI({
 });
 
 const response = await client.chat.completions.create({
-    model: "gemma-4-26b-a4b-it",
+    model: "dolphin:code-advanced",
     messages: [
         { role: "user", content: "Hello!" }
     ],

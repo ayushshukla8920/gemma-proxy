@@ -16,6 +16,9 @@ const availableModels = [
   "gemini-2.5-flash",
   "gemini-3.0-flash",
   "gemini-3.1-flash-lite-preview",
+  "dolphin:logical",
+  "dolphin:code-beginner",
+  "dolphin:code-advanced",
 ];
 
 // ✅ Normalize OpenAI → Gemini
@@ -94,6 +97,78 @@ app.post("/v1/chat/completions", async (req, res) => {
     if (!availableModels.includes(cleanModel)) {
       return res.status(400).json({ error: "Model not found" });
     }
+
+    // 🐬 DOLPHIN HANDLING
+    if (cleanModel.startsWith("dolphin")) {
+      const template = cleanModel.includes(":") ? cleanModel.split(":")[1] : "logical";
+
+      const myHeaders = new Headers();
+      myHeaders.append("accept", "text/event-stream");
+      myHeaders.append("content-type", "application/json");
+      myHeaders.append("origin", "https://chat.dphn.ai");
+      myHeaders.append("referer", "https://chat.dphn.ai/");
+      myHeaders.append("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36");
+
+      const raw = JSON.stringify({
+        messages: messages.map(m => ({ role: m.role, content: m.content })),
+        model: "dolphinserver:24B",
+        template: template
+      });
+
+      const response = await fetch("https://chat.dphn.ai/api/chat", {
+        method: "POST",
+        headers: myHeaders,
+        body: raw,
+      });
+
+      if (stream) {
+        res.setHeader("Content-Type", "text/event-stream");
+        res.setHeader("Cache-Control", "no-cache");
+        res.setHeader("Connection", "keep-alive");
+
+        const reader = response.body.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          res.write(value);
+        }
+        res.end();
+        return;
+      } else {
+        const text = await response.text();
+        const lines = text.split('\n').filter(line => line.startsWith('data: ') && line !== 'data: [DONE]');
+        let fullContent = "";
+        let lastId = "chatcmpl-" + Date.now();
+
+        for (const line of lines) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (data.choices && data.choices[0].delta && data.choices[0].delta.content) {
+              fullContent += data.choices[0].delta.content;
+            }
+            if (data.id) lastId = data.id;
+          } catch (e) { }
+        }
+
+        return res.json({
+          id: lastId,
+          object: "chat.completion",
+          created: Math.floor(Date.now() / 1000),
+          model: cleanModel,
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: "assistant",
+                content: fullContent,
+              },
+              finish_reason: "stop",
+            },
+          ],
+        });
+      }
+    }
+
 
     const geminiModel = genAI.getGenerativeModel({
       model: cleanModel,
